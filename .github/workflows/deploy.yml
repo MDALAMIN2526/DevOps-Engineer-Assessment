@@ -1,0 +1,165 @@
+name: Release & Deployment Pipeline
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "app/**"
+      - "Dockerfile"
+      - ".dockerignore"
+      - ".github/workflows/deploy.yml"
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write # Required for AWS OIDC authentication
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    name: Build & Push Multi-Arch Image
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag_sha: ${{ steps.meta.outputs.version_sha }}
+      image_tag_semver: ${{ steps.meta.outputs.version_semver }}
+      image_uri: ${{ steps.meta.outputs.image_uri }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry (GHCR)
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate Image Metadata and Tags
+        id: meta
+        run: |
+          SHA_TAG="sha-${GITHUB_SHA::7}"
+          SEMVER_TAG="v1.0.${{ github.run_number }}"
+          IMAGE_LOWER=$(echo "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}" | tr '[:upper:]' '[:lower:]')
+          
+          echo "version_sha=${SHA_TAG}" >> "$GITHUB_OUTPUT"
+          echo "version_semver=${SEMVER_TAG}" >> "$GITHUB_OUTPUT"
+          echo "image_uri=${IMAGE_LOWER}" >> "$GITHUB_OUTPUT"
+          
+          echo "Tags to be published:"
+          echo "  - ${IMAGE_LOWER}:${SHA_TAG}"
+          echo "  - ${IMAGE_LOWER}:${SEMVER_TAG}"
+          echo "  - ${IMAGE_LOWER}:latest"
+
+      - name: Build and Push Multi-Architecture Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image_uri }}:${{ steps.meta.outputs.version_sha }}
+            ${{ steps.meta.outputs.image_uri }}:${{ steps.meta.outputs.version_semver }}
+            ${{ steps.meta.outputs.image_uri }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy-to-ec2:
+    name: Deploy to EC2 with Automated Rollback
+    runs-on: ubuntu-latest
+    needs: [build-and-push]
+    # Execute deployment only if EC2 deployment secrets are configured
+    if: vars.EC2_HOST != ''
+    steps:
+      - name: Configure AWS Credentials via OIDC (Preferred)
+        if: vars.AWS_ROLE_ARN != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - name: Deploy to EC2 Instance and Validate Health
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ vars.EC2_HOST }}
+          username: ${{ vars.EC2_USER || 'ubuntu' }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script_stop: false # Allow rollback trap to execute on failure
+          envs: NEW_IMAGE
+          script: |
+            set -eo pipefail
+            NEW_IMAGE="${{ needs.build-and-push.outputs.image_uri }}:${{ needs.build-and-push.outputs.image_tag_sha }}"
+            
+            echo "=== [1/4] Detecting Current Container Image for Rollback Safety ==="
+            PREVIOUS_IMAGE=$(docker inspect --format='{{.Config.Image}}' devops_assessment_app 2>/dev/null || echo "")
+            echo "Current running image: ${PREVIOUS_IMAGE:-'None (first deployment)'}"
+            
+            rollback() {
+              echo ">>> [ALERT] Health check failed! Commencing automated rollback..."
+              if [ -n "$PREVIOUS_IMAGE" ]; then
+                echo "Rolling back to previous stable image: ${PREVIOUS_IMAGE}"
+                docker stop devops_assessment_app || true
+                docker rm -f devops_assessment_app || true
+                docker run -d --name devops_assessment_app \
+                  --restart unless-stopped \
+                  -p 8080:8080 \
+                  -e PORT=8080 \
+                  -e ENVIRONMENT=production \
+                  "$PREVIOUS_IMAGE"
+                echo "Rollback container started. Verifying rollback health..."
+                sleep 3
+                curl -fsSL http://127.0.0.1:8080/health || (echo "Rollback verification failed!" && exit 2)
+                echo "Rollback successful: Restored ${PREVIOUS_IMAGE}"
+              else
+                echo "No previous image available for rollback."
+              fi
+              exit 1
+            }
+            
+            trap rollback ERR
+            
+            echo "=== [2/4] Pulling New Container Image: ${NEW_IMAGE} ==="
+            docker pull "${NEW_IMAGE}"
+            
+            echo "=== [3/4] Updating Application Container ==="
+            docker stop devops_assessment_app 2>/dev/null || true
+            docker rm -f devops_assessment_app 2>/dev/null || true
+            docker run -d --name devops_assessment_app \
+              --restart unless-stopped \
+              -p 8080:8080 \
+              -e PORT=8080 \
+              -e ENVIRONMENT=production \
+              -e APP_VERSION="${{ needs.build-and-push.outputs.image_tag_semver }}" \
+              "${NEW_IMAGE}"
+            
+            echo "=== [4/4] Executing Smoke Tests against /health ==="
+            MAX_RETRIES=10
+            RETRY_COUNT=0
+            HEALTHY=0
+            
+            while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+              echo "Smoke test attempt $((RETRY_COUNT+1))/$MAX_RETRIES..."
+              if curl -fsSL -o /dev/null "http://127.0.0.1:8080/health"; then
+                HEALTHY=1
+                break
+              fi
+              RETRY_COUNT=$((RETRY_COUNT+1))
+              sleep 2
+            done
+            
+            if [ $HEALTHY -eq 0 ]; then
+              echo "Smoke test timed out after $MAX_RETRIES attempts!"
+              false # Triggers trap rollback ERR
+            fi
+            
+            echo "=== Deployment Succeeded! Live version: ${{ needs.build-and-push.outputs.image_tag_semver }} ==="
+            trap - ERR
