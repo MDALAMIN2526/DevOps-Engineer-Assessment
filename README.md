@@ -476,4 +476,11 @@ Estimated monthly cost for running this workload in AWS:
 
 ## 10. Note on AI Tools Usage
 
-During this assessment, I primarily referenced official documentation (Go standard library docs, Prometheus client docs, and HashiCorp Terraform registry). I used GitHub Copilot in the IDE for quick syntax lookup and code completion (such as Alloy pipeline syntax and Kustomize v5 schema properties). All system designs, Go code implementations, Prometheus alerting rules, Kubernetes manifests, Terraform configurations, and Bash scripts were written, tested, and validated by me.
+During this assessment, I used **Google Antigravity (Gemini)** as an interactive AI pair-programming assistant in my IDE, alongside official documentation (Go standard library docs, Prometheus client docs, and HashiCorp Terraform registry).
+
+Specifically, I leveraged the AI assistant for:
+- Accelerating the scaffolding of boilerplate configs (Kubernetes Kustomize base templates, Terraform resource structures, and Grafana dashboard JSON definitions).
+- Reviewing Dockerfile best practices and static analysis compliance (Hadolint and ShellCheck rules).
+- Brainstorming edge-case handling for the Linux health automation script and log rotation.
+
+All architectural decisions, Go microservice implementation, Prometheus metrics queries and alerting thresholds, security hardening policies (non-root execution, read-only root filesystems, IAM least-privilege access), and end-to-end testing were personally directed, reviewed, and validated by me. I am fully confident in explaining and discussing every component, trade-off, and line of code submitted in this assessment.
