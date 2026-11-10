@@ -20,3 +20,8 @@ health_log.txt*
 .idea/
 .vscode/
 .antigravity*
+
+# Local study & learning guides (never pushed to remote)
+LEARNING_GUIDELINE.md
+*guideline*
+*interview*
