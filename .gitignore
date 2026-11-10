@@ -1,0 +1,22 @@
+# Binaries & Go builds
+app/bin/
+app/tmp/
+coverage.out
+*.test
+*.exe
+
+# Terraform
+terraform/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars.local
+
+# Logs
+health_log.txt*
+*.log
+
+# OS & IDE
+.DS_Store
+.idea/
+.vscode/
+.antigravity*
