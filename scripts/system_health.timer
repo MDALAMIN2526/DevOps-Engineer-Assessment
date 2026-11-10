@@ -1,0 +1,11 @@
+[Unit]
+Description=Run System Health Audit Every 5 Minutes
+Requires=system_health.service
+
+[Timer]
+OnBootSec=1min
+OnCalendar=*:0/5
+Persistent=true
+
+[Install]
+WantedBy=timers.target

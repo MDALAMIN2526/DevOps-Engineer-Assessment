@@ -1,0 +1,11 @@
+[Unit]
+Description=Production System Health Audit Service
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/devops-assessment/scripts
+ExecStart=/opt/devops-assessment/scripts/system_health.sh --json --log /var/log/system_health.log
+StandardOutput=journal
+StandardError=journal
