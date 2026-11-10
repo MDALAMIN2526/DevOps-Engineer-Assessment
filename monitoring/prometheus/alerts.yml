@@ -1,0 +1,44 @@
+groups:
+  - name: application_alerts
+    rules:
+      # Alert 1: Web service instance unreachable
+      - alert: AppDown
+        expr: up{job="devops-app"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "DevOps Assessment App instance down (instance {{ $labels.instance }})"
+          description: "Target {{ $labels.instance }} has been unreachable for more than 1 minute. Check container health status."
+
+      # Alert 2: High error rate (> 5% of total requests)
+      - alert: AppHighErrorRate
+        expr: (sum(rate(http_errors_total[5m])) by (path) / sum(rate(http_requests_total[5m])) by (path)) > 0.05
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High HTTP error rate on path {{ $labels.path }}"
+          description: "Path {{ $labels.path }} error rate is {{ $value | humanizePercentage }} (exceeds 5% threshold) over 5m window."
+
+  - name: infrastructure_alerts
+    rules:
+      # Alert 3: Host disk usage above 80%
+      - alert: HostDiskUsageHigh
+        expr: ((node_filesystem_size_bytes{mountpoint="/"} - node_filesystem_free_bytes{mountpoint="/"}) / node_filesystem_size_bytes{mountpoint="/"}) * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Host root filesystem disk usage above 80%"
+          description: "Root partition disk utilization is currently at {{ $value | printf \"%.2f\" }}% for over 5 minutes."
+
+      # Alert 4: Container memory close to configured memory limit (> 85%)
+      - alert: ContainerMemoryHigh
+        expr: (container_memory_working_set_bytes{name="devops_assessment_app"} / container_spec_memory_limit_bytes{name="devops_assessment_app"}) * 100 > 85
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container memory close to limit for {{ $labels.name }}"
+          description: "Container {{ $labels.name }} working set memory has reached {{ $value | printf \"%.2f\" }}% of its 128MB limit for over 2 minutes."

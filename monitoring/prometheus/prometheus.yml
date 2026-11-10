@@ -1,0 +1,30 @@
+global:
+  scrape_interval: 10s
+  evaluation_interval: 10s
+
+rule_files:
+  - "/etc/prometheus/alerts.yml"
+
+scrape_configs:
+  # 1. Application metrics scraper
+  - job_name: "devops-app"
+    metrics_path: "/metrics"
+    static_configs:
+      - targets: ["app:8080"]
+        labels:
+          environment: "local-monitoring"
+          service: "devops-assessment-service"
+
+  # 2. Host infrastructure metrics scraper
+  - job_name: "node-exporter"
+    static_configs:
+      - targets: ["node-exporter:9100"]
+        labels:
+          instance_type: "docker-host"
+
+  # 3. Container metrics scraper
+  - job_name: "cadvisor"
+    static_configs:
+      - targets: ["cadvisor:8080"]
+        labels:
+          collector: "container-runtime"

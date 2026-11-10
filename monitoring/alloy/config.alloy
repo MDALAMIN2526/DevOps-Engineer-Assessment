@@ -1,0 +1,75 @@
+// ==============================================================================
+// Grafana Alloy Pipeline Configuration
+// Discovers Docker containers, extracts structured JSON logs, and ships to Loki.
+// ==============================================================================
+
+// 1. Discover all active Docker containers on the host
+discovery.docker "docker_containers" {
+  host = "unix:///var/run/docker.sock"
+  refresh_interval = "5s"
+}
+
+// 2. Relabel Docker target metadata to clean up labels
+discovery.relabel "docker_logs" {
+  targets = discovery.docker.docker_containers.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_image"]
+    target_label  = "image"
+  }
+}
+
+// 3. Collect container stdout/stderr log streams
+loki.source.docker "docker_log_source" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.docker_logs.output
+  forward_to = [loki.process.log_processor.receiver]
+}
+
+// 4. Parse structured JSON logs and control label cardinality
+// Low Cardinality Design:
+// - Indexed labels: `service` and `level` (strictly bounded to INFO/WARN/ERROR/DEBUG).
+// - Unbounded/Dynamic values (path, status, duration) are stored as structured metadata
+//   or left in the log line, allowing fast LogQL JSON parsing without index explosion.
+loki.process "log_processor" {
+  stage.json {
+    expressions = {
+      level   = "level",
+      msg     = "msg",
+      path    = "path",
+      status  = "status",
+      service = "service",
+    }
+  }
+
+  // Promote only low-cardinality values to indexed stream labels
+  stage.labels {
+    values = {
+      level   = "level",
+      service = "service",
+    }
+  }
+
+  // Attach high-cardinality fields as structured metadata (zero index penalty)
+  stage.structured_metadata {
+    values = {
+      path   = "path",
+      status = "status",
+    }
+  }
+
+  forward_to = [loki.write.loki_destination.receiver]
+}
+
+// 5. Forward processed logs to Loki
+loki.write "loki_destination" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

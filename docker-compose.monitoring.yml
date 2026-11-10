@@ -1,0 +1,131 @@
+services:
+  # ----------------------------------------------------------------------------
+  # 1. Prometheus - Metrics collection and alert rule evaluation
+  # ----------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: monitoring_prometheus
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - internal-monitoring-network
+      - devops-engineer-assessment_app-network
+
+  # ----------------------------------------------------------------------------
+  # 2. Loki - Centralized log aggregation engine
+  # ----------------------------------------------------------------------------
+  loki:
+    image: grafana/loki:3.2.1
+    container_name: monitoring_loki
+    restart: unless-stopped
+    command:
+      - "-config.file=/etc/loki/local-config.yaml"
+    volumes:
+      - ./monitoring/loki/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - loki_data:/tmp/loki
+    networks:
+      - internal-monitoring-network
+
+  # ----------------------------------------------------------------------------
+  # 3. Grafana Alloy - Docker container log collection and pipeline processor
+  # ----------------------------------------------------------------------------
+  alloy:
+    image: grafana/alloy:v1.4.3
+    container_name: monitoring_alloy
+    restart: unless-stopped
+    command:
+      - "run"
+      - "--server.http.listen-addr=0.0.0.0:12345"
+      - "/etc/alloy/config.alloy"
+    volumes:
+      - ./monitoring/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - internal-monitoring-network
+    depends_on:
+      - loki
+
+  # ----------------------------------------------------------------------------
+  # 4. Node Exporter - Host machine metrics
+  # Mounts required: /proc, /sys, / (rootfs) to read kernel and hardware stats.
+  # ----------------------------------------------------------------------------
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    container_name: monitoring_node_exporter
+    restart: unless-stopped
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--path.rootfs=/rootfs"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    networks:
+      - internal-monitoring-network
+
+  # ----------------------------------------------------------------------------
+  # 5. cAdvisor - Per-container resource utilization
+  # Privileges/Mounts required:
+  # - /var/run/docker.sock: Docker API communication
+  # - /sys, /var/lib/docker: cgroups and container layer inspect
+  # ----------------------------------------------------------------------------
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: monitoring_cadvisor
+    restart: unless-stopped
+    privileged: true
+    devices:
+      - /dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    networks:
+      - internal-monitoring-network
+
+  # ----------------------------------------------------------------------------
+  # 6. Grafana - Visualizations and Dashboards
+  # Only service exposed to the host system.
+  # ----------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: monitoring_grafana
+    restart: unless-stopped
+    ports:
+      - "${GRAFANA_PORT:-3001}:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin123}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./monitoring/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./monitoring/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    networks:
+      - internal-monitoring-network
+    depends_on:
+      - prometheus
+      - loki
+
+networks:
+  internal-monitoring-network:
+    driver: bridge
+  devops-engineer-assessment_app-network:
+    external: true
+
+volumes:
+  prometheus_data:
+  loki_data:
+  grafana_data:
